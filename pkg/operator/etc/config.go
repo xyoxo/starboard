@@ -19,6 +19,7 @@ type Config struct {
 	HealthProbeBindAddress        string        `env:"OPERATOR_HEALTH_PROBE_BIND_ADDRESS" envDefault:":9090"`
 	LogDevMode                    bool          `env:"OPERATOR_LOG_DEV_MODE" envDefault:"false"`
 	CISKubernetesBenchmarkEnabled bool          `env:"OPERATOR_CIS_KUBERNETES_BENCHMARK_ENABLED" envDefault:"true"`
+	VulnerabilityScannerEnabled   bool          `env:"OPERATOR_VULNERABILITY_SCANNER_ENABLED" envDefault:"true"`
 }
 
 func GetOperatorConfig() (Config, error) {

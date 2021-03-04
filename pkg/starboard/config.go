@@ -3,6 +3,7 @@ package starboard
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/aquasecurity/starboard/pkg/apis/aquasecurity/v1alpha1"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -227,8 +228,10 @@ type BuildInfo struct {
 type Scanner string
 
 const (
-	Trivy Scanner = "Trivy"
-	Aqua  Scanner = "Aqua"
+	Trivy    Scanner = "Trivy"
+	Aqua     Scanner = "Aqua"
+	Polaris  Scanner = "Polaris"
+	Conftest Scanner = "Conftest"
 )
 
 // TrivyMode describes mode in which Trivy client operates.
@@ -241,6 +244,7 @@ const (
 
 const (
 	keyVulnerabilityReportsScanner = "vulnerabilityReports.scanner"
+	keyConfigAuditReportsScanner   = "configAuditReports.scanner"
 
 	keyTrivyMode      = "trivy.mode"
 	keyTrivyServerURL = "trivy.serverURL"
@@ -261,6 +265,7 @@ type ConfigManager interface {
 func GetDefaultConfig() ConfigData {
 	return map[string]string{
 		keyVulnerabilityReportsScanner: string(Trivy),
+		keyConfigAuditReportsScanner:   string(Polaris),
 
 		"trivy.severity": "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL",
 		"trivy.imageRef": "docker.io/aquasec/trivy:0.16.0",
@@ -273,6 +278,8 @@ func GetDefaultConfig() ConfigData {
 
 		"polaris.imageRef":    "quay.io/fairwinds/polaris:3.0",
 		"polaris.config.yaml": polarisConfigYAML,
+
+		"conftest.imageRef": "openpolicyagent/conftest:v0.23.0",
 	}
 }
 
@@ -292,6 +299,23 @@ func (c ConfigData) GetVulnerabilityReportsScanner() (Scanner, error) {
 
 	return "", fmt.Errorf("invalid value (%s) of %s; allowed values (%s, %s)",
 		value, keyVulnerabilityReportsScanner, Trivy, Aqua)
+}
+
+func (c ConfigData) GetConfigAuditReportsScanner() (Scanner, error) {
+	var ok bool
+	var value string
+	if value, ok = c[keyConfigAuditReportsScanner]; !ok {
+		return "", fmt.Errorf("property %s not set", keyConfigAuditReportsScanner)
+	}
+
+	switch Scanner(value) {
+	case Polaris:
+		return Polaris, nil
+	case Conftest:
+		return Conftest, nil
+	}
+	return "", fmt.Errorf("invalid value (%s) of %s; allowed values (%s, %s)",
+		value, keyConfigAuditReportsScanner, Polaris, Conftest)
 }
 
 func (c ConfigData) GetTrivyImageRef() (string, error) {
@@ -345,6 +369,20 @@ func (c ConfigData) GetKubeHunterQuick() (bool, error) {
 
 func (c ConfigData) GetPolarisImageRef() (string, error) {
 	return c.getRequiredProperty("polaris.imageRef")
+}
+
+func (c ConfigData) GetConftestImageRef() (string, error) {
+	return c.getRequiredProperty("conftest.imageRef")
+}
+
+func (c ConfigData) GetConftestPolicies() ([]string, error) {
+	var policies []string
+	for key, _ := range c {
+		if strings.HasPrefix(key, "conftest.policy.") {
+			policies = append(policies, strings.TrimPrefix(key, "conftest.policy."))
+		}
+	}
+	return policies, nil
 }
 
 func (c ConfigData) getRequiredProperty(key string) (string, error) {
