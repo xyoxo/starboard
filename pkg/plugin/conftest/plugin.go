@@ -2,13 +2,14 @@ package conftest
 
 import (
 	"encoding/json"
-	"io"
-
+	"fmt"
 	"github.com/aquasecurity/starboard/pkg/apis/aquasecurity/v1alpha1"
 	"github.com/aquasecurity/starboard/pkg/configauditreport"
 	"github.com/aquasecurity/starboard/pkg/ext"
 	"github.com/aquasecurity/starboard/pkg/kube"
+	"github.com/aquasecurity/starboard/pkg/plugin/conftest/aquascope"
 	"github.com/aquasecurity/starboard/pkg/starboard"
+	"io"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,15 +17,122 @@ import (
 	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
+	"strings"
 )
 
 const (
 	conftestContainerName = "conftest"
 )
 
+
+type KAPPolicy struct {
+	Name string
+	Scope aquascope.Scope // Scope is the expression that we evaluate to check if this policy applicable to a given K8s object
+}
+
+const (
+	kubernetesAttribute          = "kubernetes"
+	kubernetesNamespaceAttribute = "kubernetes.namespace"
+	kubernetesClusterAttribute   = "kubernetes.cluster"
+	kubernetesPodAttribute       = "kubernetes.pod"
+	kubernetesLabelAttribute     = "kubernetes.label"
+)
+
+func GetKubernetesScopeAttributes(obj client.Object) map[string]string {
+	result := make(map[string]string)
+
+	result[fmt.Sprintf("%s.%s", kubernetesAttribute, strings.ToLower(obj.GetObjectKind().GroupVersionKind().Kind))] = obj.GetName()
+	result[kubernetesNamespaceAttribute] = obj.GetNamespace()
+	// result[kubernetesClusterAttribute] = ctx.resource.ClusterName
+	result[kubernetesPodAttribute] = obj.GetNamespace()
+
+	for key, value := range obj.GetLabels() {
+		result[fmt.Sprintf("%s.%s", kubernetesLabelAttribute, key)] = value
+	}
+
+	return result
+}
+
+func  GetMatchedKAPolicies(policies []KAPPolicy, obj client.Object) (result []KAPPolicy) {
+	containerVariables := GetKubernetesScopeAttributes(obj)
+
+	for _, policy := range policies {
+		if len(policy.Scope.Variables) == 0 {
+			continue
+		}
+
+		match, err := IsScopeMatch(policy.Scope, containerVariables)
+		if err != nil {
+			// ctx.logger.Warn(fmt.Sprintf("Failed matching scope: %s", err))
+			continue
+		}
+
+		if match {
+			//ctx.logger.Debug(fmt.Sprintf("%s %s matched policy %s", ctx.resource.Kind, ctx.resource.Name, policy.Name))
+
+			result = append(result, policy)
+		}
+	}
+
+	return result
+}
+
+func  IsScopeMatch(scope aquascope.Scope, variables map[string]string) (bool, error) {
+	if scope.Expression == "" {
+		return false, nil
+	}
+
+	for i := range scope.Variables {
+		scope.Variables[i].Value = strings.Trim(scope.Variables[i].Value, "\"'")
+	}
+
+	var processedValueVars []aquascope.Variable
+
+	for i := 0; i < len(scope.Variables); i++ {
+		variableName := scope.Variables[i].Name
+
+		if scope.Variables[i].Attribute == kubernetesLabelAttribute {
+			markedAttribute := fmt.Sprintf("%s.%s", kubernetesLabelAttribute, variableName)
+
+			if value, found := variables[markedAttribute]; found {
+				processedValueVars = append(processedValueVars, aquascope.Variable{
+					Attribute: markedAttribute,
+					Name:      variableName,
+					Value:     value,
+				})
+
+				delete(variables, markedAttribute)
+			}
+
+			scope.Variables[i].Attribute = markedAttribute
+		}
+	}
+
+	// Create eval context with changed scope attributes, for multi-value variables
+	eval := aquascope.StartEval(scope)
+
+	// Add processed multivalue
+	for _, variable := range processedValueVars {
+		// WithValue & WithNameValue are the same, except WithNameValue set the name too.
+		// for multi valued attributes, we add unique attribute and its name, value using WithNameValue method
+		eval.WithNameValue(variable.Attribute, variable.Name, variable.Value)
+	}
+
+	for attribute, value := range variables {
+		eval.WithValue(attribute, value)
+	}
+
+	return eval.Check()
+}
+
+
+
+
 type Config interface {
 	GetConftestImageRef() (string, error)
+	// Deprecated (from round 1)
 	GetConftestPolicies() ([]string, error)
+	//GetAquaPolicies() ([]KAPPolicy, error)
 }
 
 type plugin struct {
@@ -69,6 +177,15 @@ func (p *plugin) GetScanJobSpec(_ kube.Object, obj client.Object, gvk schema.Gro
 	}
 
 	secrets = append(secrets, secret)
+
+	//aquaPolicies, _  := p.config.GetAquaPolicies()
+
+	 filtered := GetMatchedKAPolicies([]KAPPolicy{},obj) // take policies from config
+
+
+	 fmt.Print(filtered)
+
+	// TODO Adjust volumeMount code to filtered KAPPolicy
 
 	policies, err := p.config.GetConftestPolicies()
 	if err != nil {

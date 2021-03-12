@@ -3,6 +3,7 @@ module github.com/aquasecurity/starboard
 go 1.15
 
 require (
+	github.com/Knetic/govaluate v3.0.0+incompatible
 	github.com/caarlos0/env/v6 v6.4.0
 	github.com/davecgh/go-spew v1.1.1
 	github.com/go-logr/logr v0.3.0
@@ -11,6 +12,7 @@ require (
 	github.com/hashicorp/go-version v1.2.0
 	github.com/onsi/ginkgo v1.15.0
 	github.com/onsi/gomega v1.10.5
+	github.com/pkg/errors v0.9.1
 	github.com/spf13/cobra v1.1.1
 	github.com/spf13/pflag v1.0.5
 	github.com/stretchr/testify v1.7.0
