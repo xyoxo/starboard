@@ -123,7 +123,7 @@ func TestIsScopeMatchWithOptions_ImageName(t *testing.T) {
 	type testArgs struct {
 		scope          Scope
 		inputVariables map[string]string
-		options ScopeMatchOptions
+		options        ScopeMatchOptions
 	}
 	tests := []struct {
 		testName string

@@ -24,10 +24,15 @@ const (
 	conftestContainerName = "conftest"
 )
 
-
+// KAPPolicy represents a Kubernetes assurance policy.
 type KAPPolicy struct {
-	Name string
-	Scope aquascope.Scope // Scope is the expression that we evaluate to check if this policy applicable to a given K8s object
+	Name     string          // Name is the name of this policy
+	Scope    aquascope.Scope // Scope is the expression that we evaluate to check if this policy applicable to a given K8s object.
+	Controls []KAPControl
+}
+
+type KAPControl struct {
+	Name string // Name is the title of the corresponding Rego script.
 }
 
 const (
@@ -44,7 +49,7 @@ func GetKubernetesScopeAttributes(obj client.Object) map[string]string {
 	result[fmt.Sprintf("%s.%s", kubernetesAttribute, strings.ToLower(obj.GetObjectKind().GroupVersionKind().Kind))] = obj.GetName()
 	result[kubernetesNamespaceAttribute] = obj.GetNamespace()
 	// result[kubernetesClusterAttribute] = ctx.resource.ClusterName
-	result[kubernetesPodAttribute] = obj.GetNamespace()
+	result[kubernetesPodAttribute] = obj.GetName()
 
 	for key, value := range obj.GetLabels() {
 		result[fmt.Sprintf("%s.%s", kubernetesLabelAttribute, key)] = value
@@ -53,7 +58,7 @@ func GetKubernetesScopeAttributes(obj client.Object) map[string]string {
 	return result
 }
 
-func  GetMatchedKAPolicies(policies []KAPPolicy, obj client.Object) (result []KAPPolicy) {
+func GetMatchedKAPolicies(policies []KAPPolicy, obj client.Object) (result []KAPPolicy) {
 	containerVariables := GetKubernetesScopeAttributes(obj)
 
 	for _, policy := range policies {
@@ -77,7 +82,7 @@ func  GetMatchedKAPolicies(policies []KAPPolicy, obj client.Object) (result []KA
 	return result
 }
 
-func  IsScopeMatch(scope aquascope.Scope, variables map[string]string) (bool, error) {
+func IsScopeMatch(scope aquascope.Scope, variables map[string]string) (bool, error) {
 	if scope.Expression == "" {
 		return false, nil
 	}
@@ -125,14 +130,8 @@ func  IsScopeMatch(scope aquascope.Scope, variables map[string]string) (bool, er
 	return eval.Check()
 }
 
-
-
-
 type Config interface {
 	GetConftestImageRef() (string, error)
-	// Deprecated (from round 1)
-	GetConftestPolicies() ([]string, error)
-	//GetAquaPolicies() ([]KAPPolicy, error)
 }
 
 type plugin struct {
@@ -151,7 +150,56 @@ func NewPlugin(clock ext.Clock, config Config) configauditreport.Plugin {
 	}
 }
 
-func (p *plugin) GetScanJobSpec(_ kube.Object, obj client.Object, gvk schema.GroupVersionKind) (corev1.PodSpec, []*corev1.Secret, error) {
+func GetKAPPoliciesFromConfigMap(cm *corev1.ConfigMap) ([]KAPPolicy, error) {
+	policies := map[string]*KAPPolicy{}
+
+	for k, v := range cm.Data {
+		if !strings.HasPrefix(k, "conftest.policy.") {
+			continue
+		}
+		parts := strings.Split(strings.TrimPrefix(k, "conftest.policy."), ".")
+		policyName := parts[0]
+		var policy *KAPPolicy
+		var exists bool
+
+		policy, exists = policies[policyName]
+		// Add policy with the given name to map if it does not exist
+		if !exists {
+			policy = &KAPPolicy{Name: policyName, Controls: []KAPControl{}}
+			policies[policyName] = policy
+		}
+
+		// If the key is for scope unmarshall it and save
+		if len(parts) == 2 && parts[1] == "scope" {
+			err := json.Unmarshal([]byte(v), &policy.Scope)
+			if err != nil {
+				return nil, fmt.Errorf("unmarshalling scope: %w", err)
+			}
+		}
+
+		// this must be control name
+		if len(parts) >= 2 && parts[1] != "scope" {
+			policy.Controls = append(policy.Controls, KAPControl{Name: strings.Join(parts[1:], ".")})
+		}
+
+	}
+
+	var result []KAPPolicy
+	for _, v := range policies {
+		result = append(result, *v)
+	}
+	return result, nil
+}
+
+func (p *plugin) GetKAPPolicies(ctx starboard.PluginContext) ([]KAPPolicy, error) {
+	cm, err := ctx.GetConfigMapByName("conftestconfig")
+	if err != nil {
+		return nil, err
+	}
+	return GetKAPPoliciesFromConfigMap(cm)
+}
+
+func (p *plugin) GetScanJobSpec(ctx starboard.PluginContext, _ kube.Object, obj client.Object, gvk schema.GroupVersionKind) (corev1.PodSpec, []*corev1.Secret, error) {
 	imageRef, err := p.config.GetConftestImageRef()
 	if err != nil {
 		return corev1.PodSpec{}, nil, err
@@ -178,34 +226,38 @@ func (p *plugin) GetScanJobSpec(_ kube.Object, obj client.Object, gvk schema.Gro
 
 	secrets = append(secrets, secret)
 
-	//aquaPolicies, _  := p.config.GetAquaPolicies()
-
-	 filtered := GetMatchedKAPolicies([]KAPPolicy{},obj) // take policies from config
-
-
-	 fmt.Print(filtered)
-
-	// TODO Adjust volumeMount code to filtered KAPPolicy
-
-	policies, err := p.config.GetConftestPolicies()
+	policies, err := p.GetKAPPolicies(ctx)
 	if err != nil {
 		return corev1.PodSpec{}, nil, err
 	}
 
+	policies = GetMatchedKAPolicies(policies, obj)
+
 	var volumeMounts []corev1.VolumeMount
 	var volumeItems []corev1.KeyToPath
 
-	for _, policy := range policies {
-		volumeItems = append(volumeItems, corev1.KeyToPath{
-			Key:  "conftest.policy." + policy,
-			Path: policy,
-		})
+	controlNames := make(map[string]bool)
 
-		volumeMounts = append(volumeMounts, corev1.VolumeMount{
-			Name:      "policies",
-			MountPath: "/project/policy/" + policy,
-			SubPath:   policy,
-		})
+	for _, policy := range policies {
+		for _, control := range policy.Controls {
+			if _, loaded := controlNames[control.Name]; loaded {
+				fmt.Printf(">>>>> Already loaded: %s <<<<<<\n", control.Name)
+				continue
+			}
+
+			volumeItems = append(volumeItems, corev1.KeyToPath{
+				Key:  "conftest.policy." + policy.Name + "." + control.Name,
+				Path: policy.Name + "_" + control.Name + ".rego",
+			})
+
+			volumeMounts = append(volumeMounts, corev1.VolumeMount{
+				Name:      "policies",
+				MountPath: "/project/policy/" + policy.Name + "_" + control.Name + ".rego",
+				SubPath:   policy.Name + "_" + control.Name + ".rego",
+			})
+
+			controlNames[control.Name] = true
+		}
 	}
 
 	volumeMounts = append(volumeMounts, corev1.VolumeMount{
@@ -225,7 +277,7 @@ func (p *plugin) GetScanJobSpec(_ kube.Object, obj client.Object, gvk schema.Gro
 				VolumeSource: corev1.VolumeSource{
 					ConfigMap: &corev1.ConfigMapVolumeSource{
 						LocalObjectReference: corev1.LocalObjectReference{
-							Name: starboard.ConfigMapName,
+							Name: "conftestconfig",
 						},
 						Items: volumeItems,
 					},
@@ -262,7 +314,7 @@ func (p *plugin) GetScanJobSpec(_ kube.Object, obj client.Object, gvk schema.Gro
 				},
 				Args: []string{
 					"-c",
-					"conftest test --output json /project/workload.yaml || true",
+					"conftest test --output json --policy /project/policy /project/workload.yaml || true",
 				},
 				SecurityContext: &corev1.SecurityContext{
 					Privileged:               pointer.BoolPtr(false),

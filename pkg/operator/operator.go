@@ -157,6 +157,7 @@ func Run(buildInfo starboard.BuildInfo, operatorConfig etc.Config) error {
 		LogsReader:     logsReader,
 		Plugin:         configAuditReportPlugin,
 		ReadWriter:     configauditreport.NewReadWriter(mgr.GetClient()),
+		PluginContext:  starboard.NewPluginContext(operatorNamespace, mgr.GetClient()),
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to setup configauditreport reconciler: %w", err)
 	}

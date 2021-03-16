@@ -6,7 +6,7 @@ metadata:
   namespace: starboard-operator
 data:
   vulnerabilityReports.scanner: Trivy
-  configAuditReports.scanner: Polars
+  configAuditReports.scanner: Conftest
   trivy.severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
   trivy.imageRef: docker.io/aquasec/trivy:0.16.0
   trivy.mode: Standalone

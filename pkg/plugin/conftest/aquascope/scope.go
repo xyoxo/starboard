@@ -416,7 +416,6 @@ func match(reg, value string, options ScopeMatchOptions) bool {
 	return matched
 }
 
-
 // NameValueToHandler is a map that represents keys that we have to evaluate with
 // name-value and not only with value.
 // for each key we have matching function to split the value into name and value

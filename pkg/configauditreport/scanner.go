@@ -27,6 +27,7 @@ type Scanner struct {
 	objectResolver *kube.ObjectResolver
 	logsReader     kube.LogsReader
 	plugin         Plugin
+	pluginCtx      starboard.PluginContext
 	ext.IDGenerator
 }
 
@@ -41,6 +42,7 @@ func NewScanner(
 		clientset:      clientset,
 		opts:           opts,
 		plugin:         plugin,
+		pluginCtx:      starboard.NewPluginContext(starboard.NamespaceName, client),
 		objectResolver: &kube.ObjectResolver{Client: client},
 		logsReader:     kube.NewLogsReader(clientset),
 		IDGenerator:    ext.NewGoogleUUIDGenerator(),
@@ -99,7 +101,7 @@ func (s *Scanner) Scan(ctx context.Context, workload kube.Object, gvk schema.Gro
 }
 
 func (s *Scanner) getScanJob(workload kube.Object, obj client.Object, gvk schema.GroupVersionKind) (*batchv1.Job, []*corev1.Secret, error) {
-	jobSpec, secrets, err := s.plugin.GetScanJobSpec(workload, obj, gvk)
+	jobSpec, secrets, err := s.plugin.GetScanJobSpec(s.pluginCtx, workload, obj, gvk)
 	if err != nil {
 		return nil, nil, err
 	}

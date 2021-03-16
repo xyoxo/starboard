@@ -41,7 +41,7 @@ func NewPlugin(clock ext.Clock, config Config) configauditreport.Plugin {
 	}
 }
 
-func (p *plugin) GetScanJobSpec(workload kube.Object, _ client.Object, gvk schema.GroupVersionKind) (corev1.PodSpec, []*corev1.Secret, error) {
+func (p *plugin) GetScanJobSpec(_ starboard.PluginContext, workload kube.Object, _ client.Object, gvk schema.GroupVersionKind) (corev1.PodSpec, []*corev1.Secret, error) {
 	imageRef, err := p.config.GetPolarisImageRef()
 	if err != nil {
 		return corev1.PodSpec{}, nil, err

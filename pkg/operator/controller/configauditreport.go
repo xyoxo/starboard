@@ -3,12 +3,12 @@ package controller
 import (
 	"context"
 	"fmt"
-
 	"github.com/aquasecurity/starboard/pkg/apis/aquasecurity/v1alpha1"
 	"github.com/aquasecurity/starboard/pkg/configauditreport"
 	"github.com/aquasecurity/starboard/pkg/kube"
 	"github.com/aquasecurity/starboard/pkg/operator/etc"
 	. "github.com/aquasecurity/starboard/pkg/operator/predicate"
+	"github.com/aquasecurity/starboard/pkg/starboard"
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -34,6 +34,7 @@ type ConfigAuditReportReconciler struct {
 	kube.LogsReader
 	configauditreport.Plugin
 	configauditreport.ReadWriter
+	starboard.PluginContext
 }
 
 var (
@@ -227,7 +228,7 @@ func (r *ConfigAuditReportReconciler) getScanJob(workload kube.Object, obj clien
 		return nil, nil, err
 	}
 
-	jobSpec, secrets, err := r.Plugin.GetScanJobSpec(workload, obj, gvk)
+	jobSpec, secrets, err := r.Plugin.GetScanJobSpec(r.PluginContext, workload, obj, gvk)
 
 	if err != nil {
 		return nil, nil, err
