@@ -12,6 +12,7 @@ import (
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
+	batchv1beta1 "k8s.io/api/batch/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,6 +46,7 @@ var (
 		{kind: kube.KindReplicationController, forObject: &corev1.ReplicationController{}, ownsObject: &v1alpha1.ConfigAuditReport{}},
 		{kind: kube.KindStatefulSet, forObject: &appsv1.StatefulSet{}, ownsObject: &v1alpha1.ConfigAuditReport{}},
 		{kind: kube.KindDaemonSet, forObject: &appsv1.DaemonSet{}, ownsObject: &v1alpha1.ConfigAuditReport{}},
+		{kind: kube.KindCronJob, forObject: &batchv1beta1.CronJob{}, ownsObject: &v1alpha1.ConfigAuditReport{}},
 		{kind: kube.KindJob, forObject: &batchv1.Job{}, ownsObject: &v1alpha1.ConfigAuditReport{}},
 	}
 )
@@ -103,9 +105,17 @@ func (r *ConfigAuditReportReconciler) reconcileWorkload(workloadKind kube.Kind) 
 					controller.Kind == string(kube.KindReplicationController) ||
 					controller.Kind == string(kube.KindStatefulSet) ||
 					controller.Kind == string(kube.KindDaemonSet) ||
-					controller.Kind == string(kube.KindCronJob) ||
 					controller.Kind == string(kube.KindJob)) {
 				log.V(1).Info("Ignoring managed pod", "controllerKind", controller.Kind, "controllerName", controller.Name)
+				return ctrl.Result{}, nil
+			}
+		}
+
+		// Skip processing if it's a Job controlled by CronJob.
+		if workloadKind == kube.KindJob {
+			controller := metav1.GetControllerOf(workloadObj)
+			if controller != nil && controller.Kind == string(kube.KindCronJob) {
+				log.V(1).Info("Ignoring managed job", "controllerKind", controller.Kind, "controllerName", controller.Name)
 				return ctrl.Result{}, nil
 			}
 		}
@@ -167,6 +177,9 @@ func (r *ConfigAuditReportReconciler) reconcileWorkload(workloadKind kube.Kind) 
 		log.V(1).Info("Scheduling configuration audit", "secrets", len(secrets))
 		err = r.Client.Create(ctx, job)
 		if err != nil {
+			if errors.IsAlreadyExists(err) {
+				return ctrl.Result{}, nil
+			}
 			return ctrl.Result{}, fmt.Errorf("creating job: %w", err)
 		}
 

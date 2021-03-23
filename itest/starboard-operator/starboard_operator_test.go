@@ -10,6 +10,8 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	batchv1beta1 "k8s.io/api/batch/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -123,6 +125,55 @@ var _ = Describe("Starboard Operator", func() {
 
 	// TODO Add a scenario for rolling update, i.e. create Deployment and then update its container image.
 
+	Describe("When CronJob is created", func() {
+		var cronJob *batchv1beta1.CronJob
+
+		BeforeEach(func() {
+			cronJob = &batchv1beta1.CronJob{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: namespaceName,
+					Name:      "hello",
+				},
+				Spec: batchv1beta1.CronJobSpec{
+					Schedule: "*/1 * * * *",
+					JobTemplate: batchv1beta1.JobTemplateSpec{
+						Spec: batchv1.JobSpec{
+							Template: corev1.PodTemplateSpec{
+								Spec: corev1.PodSpec{
+									RestartPolicy: corev1.RestartPolicyOnFailure,
+									Containers: []corev1.Container{
+										{
+											Name:  "hello",
+											Image: "busybox",
+											Command: []string{
+												"/bin/sh",
+												"-c",
+												"date; echo Hello from the Kubernetes cluster",
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+			err := kubeClient.Create(context.Background(), cronJob)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("Should create VulnerabilityReport and ConfigAuditReport", func() {
+			Eventually(HasConfigAuditReportOwnedBy(cronJob), assertionTimeout).Should(BeTrue())
+			// FIXME(issue: #415): Assign VulnerabilityReports to CronJob instead of Jobs. The PodSpec of a CronJob does not change so there's no point in rescanning individual Jobs.
+			// Eventually(HasVulnerabilityReportOwnedBy(cronJob), assertionTimeout).Should(BeTrue())
+		})
+
+		AfterEach(func() {
+			err := kubeClient.Delete(context.Background(), cronJob)
+			Expect(err).ToNot(HaveOccurred())
+		})
+	})
+
 	Describe("When operator is started", func() {
 
 		It("Should scan all nodes with CIS Kubernetes Benchmark checks", func() {
@@ -181,6 +232,7 @@ func HasConfigAuditReportOwnedBy(obj client.Object) func() bool {
 			kube.LabelResourceNamespace: obj.GetNamespace(),
 		})
 		if err != nil {
+			// TODO Report error
 			return false
 		}
 		return len(reportsList.Items) == 1
